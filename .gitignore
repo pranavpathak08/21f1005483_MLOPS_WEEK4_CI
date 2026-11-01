@@ -1,0 +1,19 @@
+
+# DVC materialized artifacts
+data/iris.csv
+models/iris_model.joblib
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Evaluation output
+evaluation_metrics.json
+
+# Google authentication credentials
+gha-creds-*.json

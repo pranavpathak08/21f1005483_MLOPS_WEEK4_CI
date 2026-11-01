@@ -1,0 +1,127 @@
+name: IRIS MLOps CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  test:
+    name: Data and Model Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Pull DVC data and model
+        id: dvc_pull
+        run: |
+          dvc pull
+
+      - name: Evaluate model
+        id: evaluate
+        continue-on-error: true
+        run: |
+          python scripts/evaluate.py
+
+      - name: Run pytest
+        id: tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m pytest tests/ -v | tee pytest-report.txt
+
+      - name: Set up CML
+        if: always() && github.event_name == 'pull_request'
+        uses: iterative/setup-cml@v2
+
+      - name: Generate CML report
+        if: always() && github.event_name == 'pull_request'
+        env:
+          TEST_STATUS: ${{ steps.tests.outcome }}
+          EVALUATION_STATUS: ${{ steps.evaluate.outcome }}
+          DVC_STATUS: ${{ steps.dvc_pull.outcome }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          lines = [
+              "# IRIS MLOps CI Report",
+              "",
+              "## Pipeline status",
+              "",
+              f"- DVC pull: **{os.environ.get('DVC_STATUS', 'not run')}**",
+              f"- Model evaluation: **{os.environ.get('EVALUATION_STATUS', 'not run')}**",
+              f"- Pytest: **{os.environ.get('TEST_STATUS', 'not run')}**",
+              "",
+              "## Model evaluation metrics",
+              "",
+              "| Metric | Value |",
+              "|---|---:|",
+          ]
+
+          metrics_path = Path("evaluation_metrics.json")
+
+          if metrics_path.exists():
+              metrics = json.loads(metrics_path.read_text())
+              for name, value in metrics.items():
+                  lines.append(f"| {name} | {value:.4f} |")
+          else:
+              lines.append("| Metrics | Unavailable |")
+
+          lines += [
+              "",
+              "## Test summary",
+              "",
+              "See the GitHub Actions job logs for individual test results.",
+          ]
+
+          Path("report.md").write_text("\n".join(lines) + "\n")
+          PY
+
+          cat report.md
+
+      - name: Publish CML report
+        if: always() && github.event_name == 'pull_request'
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cml comment create report.md
+
+      - name: Fail workflow if validation failed
+        if: always()
+        env:
+          TEST_STATUS: ${{ steps.tests.outcome }}
+          EVALUATION_STATUS: ${{ steps.evaluate.outcome }}
+          DVC_STATUS: ${{ steps.dvc_pull.outcome }}
+        run: |
+          if [ "$DVC_STATUS" != "success" ] || \
+             [ "$TEST_STATUS" != "success" ] || \
+             [ "$EVALUATION_STATUS" != "success" ]; then
+            echo "CI validation failed."
+            exit 1
+          fi
+          echo "All CI validation steps passed."

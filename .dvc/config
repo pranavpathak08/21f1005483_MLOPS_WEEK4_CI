@@ -1,0 +1,4 @@
+[core]
+    remote = storage
+['remote "storage"']
+    url = gs://mlops-week2-dvc-2026-project-b7900fcb-59af-4f18-b09/dvc-storage

@@ -1,0 +1,7 @@
+{
+  "dataset_rows": 210,
+  "training_rows": 168,
+  "test_rows": 42,
+  "accuracy": 0.9761904761904762,
+  "model": "models/iris_model.joblib"
+}
