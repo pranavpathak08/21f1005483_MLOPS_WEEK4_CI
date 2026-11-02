@@ -1,3 +1,4 @@
+
 name: IRIS MLOps CI
 
 on:
@@ -5,7 +6,8 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
+  id-token: write
   pull-requests: write
   issues: write
 
@@ -29,6 +31,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Authenticate using Google Workload Identity Federation.
+      # No service account JSON key is required.
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -53,12 +57,9 @@ jobs:
           set -o pipefail
           python -m pytest tests/ -v | tee pytest-report.txt
 
-      - name: Set up CML
-        if: always() && github.event_name == 'pull_request'
-        uses: iterative/setup-cml@v2
-
-      - name: Generate CML report
-        if: always() && github.event_name == 'pull_request'
+      # Generate a report for both push and pull request events.
+      - name: Generate CI report
+        if: always()
         env:
           TEST_STATUS: ${{ steps.tests.outcome }}
           EVALUATION_STATUS: ${{ steps.evaluate.outcome }}
@@ -100,10 +101,26 @@ jobs:
               "See the GitHub Actions job logs for individual test results.",
           ]
 
+          pytest_path = Path("pytest-report.txt")
+          if pytest_path.exists():
+              lines += [
+                  "",
+                  "## Pytest output",
+                  "",
+                  "```text",
+                  pytest_path.read_text()[-12000:],
+                  "```",
+              ]
+
           Path("report.md").write_text("\n".join(lines) + "\n")
           PY
 
           cat report.md
+
+      # Set up CML for pull request reporting.
+      - name: Set up CML
+        if: always() && github.event_name == 'pull_request'
+        uses: iterative/setup-cml@v2
 
       - name: Publish CML report
         if: always() && github.event_name == 'pull_request'
@@ -112,6 +129,30 @@ jobs:
         run: |
           cml comment create report.md
 
+      # Publish a comment directly under the commit.
+      - name: Publish commit report
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            if (!fs.existsSync('report.md')) {
+              core.warning('CI report was not generated.');
+              return;
+            }
+
+            const report = fs.readFileSync('report.md', 'utf8');
+            const sha = context.payload.pull_request?.head?.sha || context.sha;
+
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: sha,
+              body: report
+            });
+
+      # Fail the workflow if any validation step failed.
       - name: Fail workflow if validation failed
         if: always()
         env:
@@ -125,4 +166,5 @@ jobs:
             echo "CI validation failed."
             exit 1
           fi
+
           echo "All CI validation steps passed."
